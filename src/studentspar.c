@@ -1,16 +1,19 @@
-// esse trabalho foi feito por:
+// Grupo 09:
+// Gabriel Dezejácomo Maruschi - 14571525
 // Pedro Fuziwara Filho - 13676840
-// Coloquem aí os nomes de vocês
+// Matheus Cavalcanti de Santana - 13217506
+// 
+// Para compilar, execute no terminal:
+// gcc studentspar.c -o par -lm -fopenmp
 //
-// Para compilar esse programa, rode:
-//
-// gcc studentsseq.c -o par -fopenmp
-// ./par
+// Para executar, execute no terminal:
+// ./par entrada.txt
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <omp.h>
+#include <math.h>
 #include <time.h>
+#include <omp.h>
 
 float *gera_tabela(int R, int C, int A, int N, int seed)
 {
