@@ -58,52 +58,41 @@ float quickselect(float *arr, int left, int right, int k) {
     }
 }
 
-void minMedMax(Resultados *res, float *notas, int n, float *temp)
+void stats_fast(Resultados *res, float *notas, int n, float *temp)
 {
-    // min e max em O(n)
-    float min = notas[0], max = notas[0];
+    float min = notas[0];
+    float max = notas[0];
+    float soma = 0.0f;
+    float soma2 = 0.0f;
 
-    for (int i = 1; i < n; i++) {
-        if (notas[i] < min) min = notas[i];
-        if (notas[i] > max) max = notas[i];
+    #pragma omp simd reduction(+:soma, soma2) reduction(min:min) reduction(max:max)
+    for (int i = 0; i < n; i++) {
+        float x = notas[i];
+
+        soma += x;
+        soma2 += x * x;
+
+        if (x < min) min = x;
+        if (x > max) max = x;
+
+        temp[i] = x; // já copia pra mediana
     }
+
+    float media = soma / n;
 
     res->min = min;
     res->max = max;
+    res->media = media;
+    res->desvio_padrao = sqrtf((soma2 / n) - (media * media));
 
-    for (int i = 0; i < n; i++)
-        temp[i] = notas[i];
-
-    // mediana
+    // mediana (continua com quickselect)
     if (n % 2 == 1) {
         res->mediana = quickselect(temp, 0, n-1, n/2);
     } else {
         float m1 = quickselect(temp, 0, n-1, n/2 - 1);
         float m2 = quickselect(temp, 0, n-1, n/2);
-        res->mediana = (m1 + m2) / 2.0f;
+        res->mediana = (m1 + m2) * 0.5f;
     }
-}
-
-void media_global(Resultados *res, float *notas, int n)
-{
-    float soma = 0.0f;
-
-    #pragma omp simd reduction(+:soma)
-    for (int i = 0; i < n; i++)
-        soma += notas[i];
-    
-    res->media = soma / n;
-}
-
-void desvio_padrao(Resultados *res, float *notas, int n)
-{
-    float soma_variancia = 0.0f;
-    float media = res->media;
-    
-    #pragma omp simd reduction(+:soma_variancia)
-    for(int i = 0; i < n; i++)
-        soma_variancia += (notas[i] - media) * (notas[i] - media);
-    res->desvio_padrao = sqrtf(soma_variancia / n);
 }
 
 float **gera_tabela(int R, int C, int A, int N, int seed)
@@ -262,10 +251,7 @@ int main(int argc, char *argv[]) {
         #pragma omp for nowait
         for(int i = 0; i < R*C; i++) {
             offset1 = i * A;
-
-            minMedMax(&(est_cidades[i]), &medias[offset1], A, temp1);
-            media_global(&(est_cidades[i]), &medias[offset1], A);
-            desvio_padrao(&(est_cidades[i]), &medias[offset1], A);
+            stats_fast(&(est_cidades[i]), &medias[offset1], A, temp1);
         }
         free(temp1);
 
@@ -274,10 +260,7 @@ int main(int argc, char *argv[]) {
         #pragma omp for nowait
         for(int r = 0; r < R; r++) {
             offset2 = r * C * A;
-
-            minMedMax(&(est_regioes[r]), &medias[offset2], C * A, temp2);
-            media_global(&(est_regioes[r]), &medias[offset2], C * A);
-            desvio_padrao(&(est_regioes[r]), &medias[offset2], C * A);
+            stats_fast(&(est_regioes[r]), &medias[offset2], C * A, temp2);
         }
         free(temp2);
 
@@ -285,9 +268,7 @@ int main(int argc, char *argv[]) {
         #pragma omp single
         {
             float *temp3 = (float *)malloc(R * C * A * sizeof(float));
-            minMedMax(&est_brasil, medias, R * C * A, temp3);
-            media_global(&est_brasil, medias, R * C * A);
-            desvio_padrao(&est_brasil, medias, R * C * A);
+            stats_fast(&est_brasil, medias, R * C * A, temp3);
             free(temp3);
         }
 
