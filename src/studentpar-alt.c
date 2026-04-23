@@ -4,10 +4,10 @@
 // Matheus Cavalcanti de Santana - 13217506
 // 
 // Para compilar, execute no terminal:
-// gcc studentsseq.c -o seq -lm
+// gcc -O3 -fopenmp studentpar-alt.c -o par
 //
 // Para executar, execute no terminal:
-// ./seq entrada.txt
+// ./alt entrada.txt
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -163,12 +163,12 @@ int main(int argc, char *argv[]) {
     Resultados *est_regioes, *est_cidades, est_brasil;
 
     // Variaveis para premiacao
-    float melhor_media_cidade = -1.0f;
-    int regiao_melhor_cidade = -1;
-    int id_melhor_cidade = -1;
+    float melhor_media_cidade_gl = -1.0f;
+    int regiao_melhor_cidade_gl = -1;
+    int id_melhor_cidade_gl = -1;
 
-    float melhor_media_regiao = -1.0f;
-    int id_melhor_regiao = -1;
+    float melhor_media_regiao_gl = -1.0f;
+    int id_melhor_regiao_gl = -1;
 
     if (argc != 2) {
         printf("Uso: %s <arquivo_de_entrada>\n", argv[0]);
@@ -217,24 +217,26 @@ int main(int argc, char *argv[]) {
             medias[aluno] = soma/N;
         }
 
+        
+        // Calculo das estatisticas por cidade.
+        #pragma omp for 
+        for(int r = 0; r < R; r++) {
+            for(int c = 0; c < C; c++) {
+                offset1 = (r * C + c) * A;
+
+                #pragma omp task firstprivate(offset1)
+                minMedMax(&(est_cidades[r * C + c]), &medias[offset1], A);
+
+                #pragma omp task firstprivate(offset1) depend(out: est_cidades[r * C + c].media)
+                media_global(&(est_cidades[r * C + c]), &medias[offset1], A);
+
+                #pragma omp task firstprivate(offset1) depend(in: est_cidades[r * C + c].media)
+                desvio_padrao(&(est_cidades[r * C + c]), &medias[offset1], A);
+            }
+        }
+
         #pragma omp single
         {
-            // Calculo das estatisticas por cidade
-            for(int r = 0; r < R; r++) {
-                for(int c = 0; c < C; c++) {
-                    offset1 = (r * C + c) * A;
-
-                    #pragma omp task firstprivate(offset1)
-                    minMedMax(&(est_cidades[r * C + c]), &medias[offset1], A);
-
-                    #pragma omp task firstprivate(offset1) depend(out: est_cidades[r * C + c].media)
-                    media_global(&(est_cidades[r * C + c]), &medias[offset1], A);
-
-                    #pragma omp task firstprivate(offset1) depend(in: est_cidades[r * C + c].media)
-                    desvio_padrao(&(est_cidades[r * C + c]), &medias[offset1], A);
-                }
-            }
-
             // Calculo das estatisticas por regiao
             for(int r = 0; r < R; r++) {
                 offset2 = r * C * A;
@@ -251,33 +253,55 @@ int main(int argc, char *argv[]) {
 
             // Calculo da estatistica para o Brasil
             #pragma omp task
+            {
             minMedMax(&est_brasil, medias, R * C * A);
-
-            #pragma omp task
             media_global(&est_brasil, medias, R * C * A);
-
-            #pragma omp task
             desvio_padrao(&est_brasil, medias, R * C * A);
+            }
         }
         // Aguarda a finalizacao das tasks para calculo das premiacoes
         #pragma omp taskwait
 
-        melhor_media_cidade = est_cidades[0].media;
-        #pragma omp for private(i) reduction(max: melhor_media_cidade)
+        // Calculo das premiacoes para cidade
+        float melhor_cidade_lc = -1.0f;
+        int regiao_melhor_cidade_lc = -1;
+        int id_cidade_lc = -1;
+
+        #pragma omp for
         for(i = 0; i < R*C; i++) {
-            if(est_cidades[i].media > melhor_media_cidade) {
-                melhor_media_cidade = est_cidades[i].media;
-                regiao_melhor_cidade = i/C;
-                id_melhor_cidade = i%C;
+            if(est_cidades[i].media > melhor_cidade_lc) {
+                melhor_cidade_lc = est_cidades[i].media;
+                regiao_melhor_cidade_lc = i/C;
+                id_cidade_lc = i%C;
             }
         }
 
-        melhor_media_regiao = est_regioes[0].media;
-        #pragma omp for private(i) reduction(max: melhor_media_regiao)
+        #pragma omp critical
+        {
+            if(melhor_cidade_lc >  melhor_media_cidade_gl) {
+                melhor_media_cidade_gl = melhor_cidade_lc;
+                regiao_melhor_cidade_gl = regiao_melhor_cidade_lc;
+                id_melhor_cidade_gl = id_cidade_lc;
+            }
+        }
+
+        // Calculo das premiacoes para regiao
+        float melhor_regiao_lc = -1.0f;
+        int id_regiao_lc = -1;
+
+        #pragma omp for
         for(i = 0; i < R; i++) {
-            if(est_regioes[i].media > melhor_media_regiao) {
-                melhor_media_regiao = est_regioes[i].media;
-                id_melhor_regiao = i;
+            if(est_regioes[i].media > melhor_regiao_lc) {
+                melhor_regiao_lc = est_regioes[i].media;
+                id_regiao_lc = i;
+            }
+        }
+
+        #pragma omp critical
+        {
+            if(melhor_regiao_lc > melhor_media_regiao_gl) {
+                melhor_media_regiao_gl = melhor_regiao_lc;
+                id_melhor_regiao_gl = id_regiao_lc;
             }
         }
     }
@@ -286,8 +310,8 @@ int main(int argc, char *argv[]) {
 
     // --- IMPRESSOES FORA DA CONTAGEM DE TEMPO ---
     imprime_resultados(est_cidades, est_regioes, est_brasil, R, C, 
-                       id_melhor_regiao, melhor_media_regiao, 
-                       regiao_melhor_cidade, id_melhor_cidade, melhor_media_cidade, 
+                       id_melhor_regiao_gl, melhor_media_regiao_gl, 
+                       regiao_melhor_cidade_gl, id_melhor_cidade_gl, melhor_media_cidade_gl, 
                        tempo);
 
     //Liberação de matrizes e arrays
