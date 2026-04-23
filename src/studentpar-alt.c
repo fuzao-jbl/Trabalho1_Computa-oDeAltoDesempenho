@@ -4,10 +4,10 @@
 // Matheus Cavalcanti de Santana - 13217506
 // 
 // Para compilar, execute no terminal:
-// gcc -O3 -fopenmp studentpar-alt.c -o par
+// gcc -O3 -fopenmp studentpar-alt.c -o par -lm
 //
 // Para executar, execute no terminal:
-// ./alt entrada.txt
+// ./par entrada.txt
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,35 +23,72 @@ typedef struct {
     float desvio_padrao;
 } Resultados;
 
-//Funcao de comparacao para o qsort
-int cmp_float(const void *a, const void *b) {
-    float fa = *(const float*)a;
-    float fb = *(const float*)b;
-    return (fa > fb) - (fa < fb);
+// Função para quickselect
+int partition(float *arr, int left, int right) {
+    float pivot = arr[right];
+    int i = left;
+
+    for (int j = left; j < right; j++) {
+        if (arr[j] < pivot) {
+            float tmp = arr[i];
+            arr[i] = arr[j];
+            arr[j] = tmp;
+            i++;
+        }
+    }
+
+    float tmp = arr[i];
+    arr[i] = arr[right];
+    arr[right] = tmp;
+
+    return i;
 }
 
-void minMedMax(Resultados *res, float *notas, int n)
+// Quickselect
+float quickselect(float *arr, int left, int right, int k) {
+    while (1) {
+        int pivot_index = partition(arr, left, right);
+
+        if (pivot_index == k)
+            return arr[k];
+        else if (pivot_index > k)
+            right = pivot_index - 1;
+        else
+            left = pivot_index + 1;
+    }
+}
+
+void minMedMax(Resultados *res, float *notas, int n, float *temp)
 {
-    // Aloca vetor temporario para nao modificar o array original durante a ordenacao
-    float *temp = (float *)malloc(n * sizeof(float));
+    // min e max em O(n)
+    float min = notas[0], max = notas[0];
+
+    for (int i = 1; i < n; i++) {
+        if (notas[i] < min) min = notas[i];
+        if (notas[i] > max) max = notas[i];
+    }
+
+    res->min = min;
+    res->max = max;
 
     for (int i = 0; i < n; i++)
         temp[i] = notas[i];
 
-    qsort(temp, n, sizeof(float), cmp_float);
-
-    res->min = temp[0];
-    res->max = temp[n-1];
-    
-    if(n%2 == 0) res->mediana = (temp[n / 2 - 1] + temp[n / 2]) / 2.0f;
-    else res->mediana = temp[(n-1)/2];
-    free(temp);
+    // mediana
+    if (n % 2 == 1) {
+        res->mediana = quickselect(temp, 0, n-1, n/2);
+    } else {
+        float m1 = quickselect(temp, 0, n-1, n/2 - 1);
+        float m2 = quickselect(temp, 0, n-1, n/2);
+        res->mediana = (m1 + m2) / 2.0f;
+    }
 }
 
 void media_global(Resultados *res, float *notas, int n)
 {
     float soma = 0.0f;
 
+    #pragma omp simd reduction(+:soma)
     for (int i = 0; i < n; i++)
         soma += notas[i];
     
@@ -61,10 +98,12 @@ void media_global(Resultados *res, float *notas, int n)
 void desvio_padrao(Resultados *res, float *notas, int n)
 {
     float soma_variancia = 0.0f;
-
+    float media = res->media;
+    
+    #pragma omp simd reduction(+:soma_variancia)
     for(int i = 0; i < n; i++)
-        soma_variancia += (notas[i] - res->media) * (notas[i] - res->media);
-    res->desvio_padrao = sqrt(soma_variancia / n);
+        soma_variancia += (notas[i] - media) * (notas[i] - media);
+    res->desvio_padrao = sqrtf(soma_variancia / n);
 }
 
 float **gera_tabela(int R, int C, int A, int N, int seed)
@@ -219,48 +258,38 @@ int main(int argc, char *argv[]) {
 
         
         // Calculo das estatisticas por cidade.
-        #pragma omp for 
-        for(int r = 0; r < R; r++) {
-            for(int c = 0; c < C; c++) {
-                offset1 = (r * C + c) * A;
+        float *temp1 = (float *)malloc(A * sizeof(float));
+        #pragma omp for nowait
+        for(int i = 0; i < R*C; i++) {
+            offset1 = i * A;
 
-                #pragma omp task firstprivate(offset1)
-                minMedMax(&(est_cidades[r * C + c]), &medias[offset1], A);
-
-                #pragma omp task firstprivate(offset1) depend(out: est_cidades[r * C + c].media)
-                media_global(&(est_cidades[r * C + c]), &medias[offset1], A);
-
-                #pragma omp task firstprivate(offset1) depend(in: est_cidades[r * C + c].media)
-                desvio_padrao(&(est_cidades[r * C + c]), &medias[offset1], A);
-            }
+            minMedMax(&(est_cidades[i]), &medias[offset1], A, temp1);
+            media_global(&(est_cidades[i]), &medias[offset1], A);
+            desvio_padrao(&(est_cidades[i]), &medias[offset1], A);
         }
+        free(temp1);
 
+        // Calculo das estatisticas por regiao,
+        float *temp2 = (float *)malloc(C * A * sizeof(float));
+        #pragma omp for nowait
+        for(int r = 0; r < R; r++) {
+            offset2 = r * C * A;
+
+            minMedMax(&(est_regioes[r]), &medias[offset2], C * A, temp2);
+            media_global(&(est_regioes[r]), &medias[offset2], C * A);
+            desvio_padrao(&(est_regioes[r]), &medias[offset2], C * A);
+        }
+        free(temp2);
+
+        // Calculo da estatistica para o Brasil
         #pragma omp single
         {
-            // Calculo das estatisticas por regiao
-            for(int r = 0; r < R; r++) {
-                offset2 = r * C * A;
-
-                #pragma omp task firstprivate(offset2)
-                minMedMax(&(est_regioes[r]), &medias[offset2], C * A);
-
-                #pragma omp task firstprivate(offset2) depend(out: est_regioes[r].media)
-                media_global(&(est_regioes[r]), &medias[offset2], C * A);
-
-                #pragma omp task firstprivate(offset2) depend(in: est_regioes[r].media)
-                desvio_padrao(&(est_regioes[r]), &medias[offset2], C * A);
-            }
-
-            // Calculo da estatistica para o Brasil
-            #pragma omp task
-            {
-            minMedMax(&est_brasil, medias, R * C * A);
+            float *temp3 = (float *)malloc(R * C * A * sizeof(float));
+            minMedMax(&est_brasil, medias, R * C * A, temp3);
             media_global(&est_brasil, medias, R * C * A);
             desvio_padrao(&est_brasil, medias, R * C * A);
-            }
+            free(temp3);
         }
-        // Aguarda a finalizacao das tasks para calculo das premiacoes
-        #pragma omp taskwait
 
         // Calculo das premiacoes para cidade
         float melhor_cidade_lc = -1.0f;

@@ -23,11 +23,37 @@ typedef struct {
     float desvio_padrao;
 } Resultados;
 
-//Funcao de comparacao para o qsort
-int cmp_float(const void *a, const void *b) {
-    float fa = *(const float*)a;
-    float fb = *(const float*)b;
-    return (fa > fb) - (fa < fb);
+int partition(float *arr, int left, int right) {
+    float pivot = arr[right];
+    int i = left;
+
+    for (int j = left; j < right; j++) {
+        if (arr[j] < pivot) {
+            float tmp = arr[i];
+            arr[i] = arr[j];
+            arr[j] = tmp;
+            i++;
+        }
+    }
+
+    float tmp = arr[i];
+    arr[i] = arr[right];
+    arr[right] = tmp;
+
+    return i;
+}
+
+float quickselect(float *arr, int left, int right, int k) {
+    while (1) {
+        int pivot_index = partition(arr, left, right);
+
+        if (pivot_index == k)
+            return arr[k];
+        else if (pivot_index > k)
+            right = pivot_index - 1;
+        else
+            left = pivot_index + 1;
+    }
 }
 
 //Funcao que calcula as estatisticas de um conjunto de notas
@@ -59,11 +85,12 @@ Resultados calcula_estatisticas(float *notas, int n) {
     est.desvio_padrao = sqrt(soma_variancia / n);
     
     // Mediana
-    qsort(temp, n, sizeof(float), cmp_float);
-    if (n % 2 == 0) {
-        est.mediana = (temp[n / 2 - 1] + temp[n / 2]) / 2.0f;
+    if (n % 2 == 1) {
+        est.mediana = quickselect(temp, 0, n-1, n/2);
     } else {
-        est.mediana = temp[n / 2];
+        float m1 = quickselect(temp, 0, n-1, n/2 - 1);
+        float m2 = quickselect(temp, 0, n-1, n/2);
+        est.mediana = (m1 + m2) / 2.0f;
     }
     
     free(temp);
@@ -215,7 +242,7 @@ int main(int argc, char *argv[])
 
     // gera tabela
     float **tabela = gera_tabela(R, C, A, N, seed);
-    printa_tabela(tabela, R, C, A , N, seed);
+    //printa_tabela(tabela, R, C, A , N, seed);
     
     // fazemos a computação
     clock_gettime(CLOCK_MONOTONIC, &inicio);
