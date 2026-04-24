@@ -4,40 +4,129 @@
 // Matheus Cavalcanti de Santana - 13217506
 // 
 // Para compilar, execute no terminal:
-// gcc studentspar.c -o par -lm -fopenmp
+// gcc -O3 -fopenmp studentspar.c -o par -lm
 //
 // Para executar, execute no terminal:
 // ./par entrada.txt
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <math.h>
 #include <time.h>
-#include <omp.h>
+#include <math.h>
 
-float *gera_tabela(int R, int C, int A, int N, int seed)
+//Estrutura para armazenar os resultados
+typedef struct {
+    float min;
+    float max;
+    float mediana;
+    float media;
+    float desvio_padrao;
+} Resultados;
+
+// Função para o Quickselect
+int partition(float *arr, int left, int right) {
+    float pivot = arr[right];
+    int i = left;
+
+    for (int j = left; j < right; j++) {
+        if (arr[j] < pivot) {
+            float tmp = arr[i];
+            arr[i] = arr[j];
+            arr[j] = tmp;
+            i++;
+        }
+    }
+
+    float tmp = arr[i];
+    arr[i] = arr[right];
+    arr[right] = tmp;
+
+    return i;
+}
+
+// Quickselect
+// Encontra o k-esimo menor numero em um array desorganizado.
+float quickselect(float *arr, int left, int right, int k) {
+    while (1) {
+        int pivot_index = partition(arr, left, right);
+
+        if (pivot_index == k)
+            return arr[k];
+        else if (pivot_index > k)
+            right = pivot_index - 1;
+        else
+            left = pivot_index + 1;
+    }
+}
+
+// Função retorna todos as estatísticas relacionadas a um conjunto de notas de tamanho n.
+// Vetor auxiliar temp é utilizado para evitar alterções do vetor original
+void stats_fast(Resultados *res, float *notas, int n, float *temp)
+{
+    float min = notas[0];
+    float max = notas[0];
+    float soma = 0.0f;
+    float soma2 = 0.0f;
+
+    #pragma omp simd reduction(+:soma, soma2) reduction(min:min) reduction(max:max)
+    for (int i = 0; i < n; i++) {
+        float x = notas[i];
+
+        soma += x;
+        soma2 += x * x;
+
+        if (x < min) min = x;
+        if (x > max) max = x;
+
+        temp[i] = x; // já copia pra mediana
+    }
+
+    float media = soma / n;
+
+    res->min = min;
+    res->max = max;
+    res->media = media;
+    res->desvio_padrao = sqrtf((soma2 / n) - (media * media));
+
+    // mediana como quickselect
+    if (n % 2 == 1) {
+        res->mediana = quickselect(temp, 0, n-1, n/2);
+    } else {
+        float m1 = quickselect(temp, 0, n-1, n/2 - 1);
+        float m2 = quickselect(temp, 0, n-1, n/2);
+        res->mediana = (m1 + m2) * 0.5f;
+    }
+}
+
+// Gera a tabela com valores pseudoaleatórios dada uma seed
+float **gera_tabela(int R, int C, int A, int N, int seed)
 {
     srand(seed);
     int total_alunos = R*C*A;
 
-    // a tabela vai ser uma matriz, que eu decidi alocar de forma continua
-    // de modo a otimizar o uso de memoria cache
-    float *tabela = (float *)malloc(total_alunos*N*sizeof(float));
+    // a tabela vai ser uma matriz, que é um ponteiro de ponteiro
+    float **tabela = (float **)malloc(total_alunos*sizeof(float *));
 
     for (int aluno = 0; aluno < total_alunos; aluno++)
+    {
+        tabela[aluno] = (float *)malloc(N*sizeof(float));
         for (int parcial = 0; parcial < N; parcial++)
-           tabela[aluno*N + parcial] = (rand()%1001)/10.0;
+           tabela[aluno][parcial] = (rand()%1001)/10.0;
+    }
 
     return tabela;
 }
 
 // libera a memória alocada pela tabela
-void destroi_tabela(float *tabela)
+void destroi_tabela(float **tabela, int R, int C, int A)
 {
+    int total_alunos = R*C*A;
+    for (int aluno = 0; aluno < total_alunos; aluno++)
+        free(tabela[aluno]);
     free(tabela);
 }
 
-void printa_tabela(float *tabela, int R, int C, int A, int N, int seed)
+void printa_tabela(float **tabela, int R, int C, int A, int N, int seed)
 {
     printf("TABELA DE NOTAS\n\n");
     printf("R: %d\n", R);
@@ -53,75 +142,202 @@ void printa_tabela(float *tabela, int R, int C, int A, int N, int seed)
             {
                 printf("R: %d ; C: %d ; A: %d |", r, c, a);
                 for (int n = 0; n < N; n++)
-                    printf(" %3.1f |", tabela[linha*N + n]);
+                    printf(" %3.1f |", tabela[linha][n]);
                 printf("\n");
                 linha++;
             }
 }
 
-float *calcula_medias(float *tabela, int R, int C, int A, int N, int threads)
-{
-    int total_alunos = R*C*A;
-    float soma;
-
-    float *medias = (float *)malloc(total_alunos*sizeof(float));
-
-    #pragma omp parallel for private (soma) num_threads(threads)
-    for (int aluno = 0; aluno < total_alunos; aluno++)
-    {
-        soma = 0.0f;
-        for (int parcial = 0; parcial < N; parcial++)
-            soma += tabela[aluno*N + parcial];
-        medias[aluno] = soma/N;
+void imprime_resultados(Resultados *est_cidades, Resultados *est_regioes, Resultados est_brasil, 
+                        int R, int C, 
+                        int id_melhor_regiao, float melhor_media_regiao, 
+                        int regiao_melhor_cidade, int id_melhor_cidade, float melhor_media_cidade, 
+                        double tempo) {
+    
+    printf("Cidades\t\tMin Nota\tMax Nota\tMediana\t\tMédia\t\tDsvPdr\n");
+    for (int r = 0; r < R; r++) {
+        for (int c = 0; c < C; c++) {
+            Resultados est = est_cidades[r * C + c];
+            printf("R=%d, C=%d\t%.1f\t\t%.1f\t\t%.1f\t\t%.1f\t\t%.1f\n", 
+                   r, c, est.min, est.max, est.mediana, est.media, est.desvio_padrao);
+        }
     }
+    printf("\n");
 
-    return medias;
+    printf("Regiões\t\tMin Nota\tMax Nota\tMediana\t\tMédia\t\tDsvPdr\n");
+    for (int r = 0; r < R; r++) {
+        Resultados est = est_regioes[r];
+        printf("R=%d\t\t%.1f\t\t%.1f\t\t%.1f\t\t%.1f\t\t%.1f\n", 
+               r, est.min, est.max, est.mediana, est.media, est.desvio_padrao);
+    }
+    printf("\n");
+
+    printf("Brasil\t\tMin Nota\tMax Nota\tMediana\t\tMédia\t\tDsvPdr\n");
+    printf("\t\t%.1f\t\t%.1f\t\t%.1f\t\t%.1f\t\t%.1f\n\n", 
+           est_brasil.min, est_brasil.max, est_brasil.mediana, est_brasil.media, est_brasil.desvio_padrao);
+
+    printf("Premiação\tReg/Cid\t\tMedia Arit\n");
+    printf("Melhor região:\tR%d\t\t%.1f\n", id_melhor_regiao, melhor_media_regiao);
+    printf("Melhor cidade:\tR%d-C%d\t\t%.1f\n\n", regiao_melhor_cidade, id_melhor_cidade, melhor_media_cidade);
+
+    printf("Tempo de resposta em segundos, sem considerar E/S: %.9fs\n", tempo);
 }
 
-void printa_medias(float *medias, int R, int C, int A)
-{
-    int aluno = 0;
-    printf("MÉDIAS\n\n");
-    for (int r = 0; r < R; r++)
-        for (int c = 0; c < C; c++)
-            for (int a = 0; a < A; a++)
-            {
-                printf("R: %d ; C: %d ; A: %d | %3.1f\n", r, c, a, medias[aluno]);
-                aluno++;
-            }
-}
-
-int main()
-{
-    int R, C, A, N, seed, threads;
+int main(int argc, char *argv[]) {
+    int R, C, A, N, T, seed, offset1, offset2, i;
+    int aluno, parcial, total_alunos;
+    float soma;
+    double tempo;
     struct timespec inicio, fim;
 
-    printf("R: ");
-    scanf("%d", &R);
-    printf("C: ");
-    scanf("%d", &C);
-    printf("A: ");
-    scanf("%d", &A);
-    printf("N: ");
-    scanf("%d", &N);
-    printf("seed: ");
-    scanf("%d", &seed);
-    printf("threads: ");
-    scanf("%d", &threads);
+    // Definicao de posicoes de memoria
+    float **tabela, *medias;
+    Resultados *est_regioes, *est_cidades, est_brasil;
 
-    float *tabela = gera_tabela(R, C, A, N, seed);
+    // Variaveis para premiacao
+    float melhor_media_cidade_gl = -1.0f;
+    int regiao_melhor_cidade_gl = -1;
+    int id_melhor_cidade_gl = -1;
 
+    float melhor_media_regiao_gl = -1.0f;
+    int id_melhor_regiao_gl = -1;
+
+    if (argc != 2) {
+        printf("Uso: %s <arquivo_de_entrada>\n", argv[0]);
+        return 1;
+    }
+
+    FILE *arquivo = fopen(argv[1], "r");
+    if (arquivo == NULL) {
+        printf("Erro ao abrir o arquivo %s\n", argv[1]);
+        return 1;
+    }
+
+    //Leitura de entradas
+    fscanf(arquivo, "%d", &R);
+    fscanf(arquivo, "%d", &C);
+    fscanf(arquivo, "%d", &A);
+    fscanf(arquivo, "%d", &N);
+    fscanf(arquivo, "%d", &T);
+    fscanf(arquivo, "%d", &seed);
+    fclose(arquivo);
+
+    // Alocacao de memoria para os resultados das cidades e regioes
+    est_cidades = malloc(R * C * sizeof(Resultados));
+    est_regioes = malloc(R * sizeof(Resultados));
+
+    total_alunos = R*C*A;
+
+    // gera tabela de notas e aloca espaço para as médias
+    tabela = gera_tabela(R, C, A, N, seed);
+    medias = (float *)malloc(total_alunos*sizeof(float));
+
+    // Inicio da medida do tempo
     clock_gettime(CLOCK_MONOTONIC, &inicio);
-    float *medias = calcula_medias(tabela, R, C, A, N, threads);
-    // temos mais computação para fazer aqui dentro
-    clock_gettime(CLOCK_MONOTONIC, &fim);
 
-    double tempo = (fim.tv_sec - inicio.tv_sec) + (fim.tv_nsec - inicio.tv_nsec)/1e9;
-    printf("tempo paralelo: %.9f segundos\n", tempo); 
-    // vai fazer várias coisas com a tabela e depois vai liberar ela
-    destroi_tabela(tabela);
-    destroi_tabela(medias);
+    // Início da região paralela
+    #pragma omp parallel num_threads(T)
+    {
+        // Calculo das medias
+        // Barreira implicita no for
+        #pragma omp for private(aluno, parcial, soma) 
+        for (aluno = 0; aluno < total_alunos; aluno++)
+        {
+            soma = 0.0f;
+            #pragma omp simd reduction(+:soma)
+            for (parcial = 0; parcial < N; parcial++)
+                soma += tabela[aluno][parcial];
+            medias[aluno] = soma/N;
+        }
+
+        
+        // Calculo das estatisticas por cidade.
+        float *temp1 = (float *)malloc(A * sizeof(float));
+        #pragma omp for nowait
+        for(int i = 0; i < R*C; i++) {
+            offset1 = i * A;
+            stats_fast(&(est_cidades[i]), &medias[offset1], A, temp1);
+        }
+        free(temp1);
+
+        // Calculo das estatisticas por regiao,
+        float *temp2 = (float *)malloc(C * A * sizeof(float));
+        #pragma omp for nowait
+        for(int r = 0; r < R; r++) {
+            offset2 = r * C * A;
+            stats_fast(&(est_regioes[r]), &medias[offset2], C * A, temp2);
+        }
+        free(temp2);
+
+        // Calculo da estatistica para o Brasil
+        #pragma omp single
+        {
+            float *temp3 = (float *)malloc(R * C * A * sizeof(float));
+            stats_fast(&est_brasil, medias, R * C * A, temp3);
+            free(temp3);
+        }
+
+        // Calculo das premiacoes para cidade
+        float melhor_cidade_lc = -1.0f;
+        int regiao_melhor_cidade_lc = -1;
+        int id_cidade_lc = -1;
+
+        // Seleção da cidade com maior média para uma dada thread "local"
+        // Pragma omp for com barreira implícita
+        #pragma omp for
+        for(i = 0; i < R*C; i++) {
+            if(est_cidades[i].media > melhor_cidade_lc) {
+                melhor_cidade_lc = est_cidades[i].media;
+                regiao_melhor_cidade_lc = i/C;
+                id_cidade_lc = i%C;
+            }
+        }
+
+        // Acesso com write em região crítica para evitar data race
+        #pragma omp critical
+        {
+            if(melhor_cidade_lc >  melhor_media_cidade_gl) {
+                melhor_media_cidade_gl = melhor_cidade_lc;
+                regiao_melhor_cidade_gl = regiao_melhor_cidade_lc;
+                id_melhor_cidade_gl = id_cidade_lc;
+            }
+        }
+
+        // Calculo das premiacoes para regiao
+        // Procedimento similar para regiões
+        float melhor_regiao_lc = -1.0f;
+        int id_regiao_lc = -1;
+
+        #pragma omp for
+        for(i = 0; i < R; i++) {
+            if(est_regioes[i].media > melhor_regiao_lc) {
+                melhor_regiao_lc = est_regioes[i].media;
+                id_regiao_lc = i;
+            }
+        }
+
+        #pragma omp critical
+        {
+            if(melhor_regiao_lc > melhor_media_regiao_gl) {
+                melhor_media_regiao_gl = melhor_regiao_lc;
+                id_melhor_regiao_gl = id_regiao_lc;
+            }
+        }
+    }
+    clock_gettime(CLOCK_MONOTONIC, &fim);
+    tempo = (fim.tv_sec - inicio.tv_sec) + (fim.tv_nsec - inicio.tv_nsec)/1e9;
+
+    // --- IMPRESSOES FORA DA CONTAGEM DE TEMPO ---
+    imprime_resultados(est_cidades, est_regioes, est_brasil, R, C, 
+                       id_melhor_regiao_gl, melhor_media_regiao_gl, 
+                       regiao_melhor_cidade_gl, id_melhor_cidade_gl, melhor_media_cidade_gl, 
+                       tempo);
+
+    //Liberação de matrizes e arrays
+    destroi_tabela(tabela, R, C, A);
+    free(medias);
+    free(est_cidades);
+    free(est_regioes);
 
     return 0;
 }
-

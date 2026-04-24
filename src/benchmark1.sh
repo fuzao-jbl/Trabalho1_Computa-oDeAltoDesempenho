@@ -1,5 +1,5 @@
 #Executar: /benchmark1.sh
-#Mude EXEC para alterar a versao do codigo a ser executada
+#Mude EXEC para alterar a versao do codigo a ser executada(par: paralelo, seq: sequencial)
 #!/bin/bash
 
 EXEC=./par
